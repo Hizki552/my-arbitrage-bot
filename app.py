@@ -22,7 +22,8 @@ def get_markets_data():
     try:
         r = requests.get("https://api.elections.kalshi.com/trade-api/v2/markets?status=open&limit=1000", timeout=10 )
         r.raise_for_status()
-        kalshi_markets = r.json().get('markets', [])
+        kalshi_data = r.json()
+        kalshi_markets = kalshi_data.get('markets', [])
         for m in kalshi_markets:
             if m.get('yes_price'):
                 all_markets.append({'platform': 'Kalshi', 'title': m['title'], 'yes_price': m['yes_price'], 'no_price': 1.0 - m['yes_price']})
@@ -33,11 +34,16 @@ def get_markets_data():
     try:
         r = requests.get("https://gamma-api.polymarket.com/events?closed=false&limit=1000", timeout=10 )
         r.raise_for_status()
-        polymarket_events = r.json().get('data', [])
-        for e in polymarket_events:
-            for m in e.get('markets', []):
-                if len(m.get('outcomes', [])) == 2:
-                    all_markets.append({'platform': 'Polymarket', 'title': e.get('question'), 'yes_price': float(m['outcomes'][0]['price']), 'no_price': float(m['outcomes'][1]['price'])})
+        polymarket_data = r.json()
+        # --- התיקון כאן: בודקים שהתשובה היא מילון לפני שמנסים לגשת ל-'data' ---
+        if isinstance(polymarket_data, dict):
+            polymarket_events = polymarket_data.get('data', [])
+            for e in polymarket_events:
+                for m in e.get('markets', []):
+                    if len(m.get('outcomes', [])) == 2:
+                        all_markets.append({'platform': 'Polymarket', 'title': e.get('question'), 'yes_price': float(m['outcomes'][0]['price']), 'no_price': float(m['outcomes'][1]['price'])})
+        else:
+            st.warning("Polymarket API returned an unexpected data format. Skipping for this scan.")
     except requests.RequestException as e:
         st.error(f"שגיאה בגישה ל-Polymarket: {e}")
 
@@ -47,7 +53,6 @@ def get_markets_data():
         r.raise_for_status()
         manifold_markets = r.json()
         for m in manifold_markets:
-            # נתמקד בשווקים בינאריים (YES/NO) שעדיין פתוחים
             if m.get('outcomeType') == 'BINARY' and not m.get('isResolved'):
                 all_markets.append({'platform': 'Manifold', 'title': m['question'], 'yes_price': m['probability'], 'no_price': 1.0 - m['probability']})
     except requests.RequestException as e:
@@ -112,7 +117,13 @@ st.sidebar.header("⚙️ הגדרות סריקה")
 similarity_threshold = st.sidebar.slider("סף דמיון סמנטי", 0.7, 1.0, 0.85, 0.01)
 profit_threshold = st.sidebar.slider("סף רווח נטו מינימלי (ROI %)", 0.0, 20.0, 1.0, 0.5)
 
+if 'scan_clicked' not in st.session_state:
+    st.session_state.scan_clicked = False
+
 if st.sidebar.button("🚀 סרוק עכשיו"):
+    st.session_state.scan_clicked = True
+
+if st.session_state.scan_clicked:
     with st.spinner("טוען מודל שפה ושולף נתונים מכל הפלטפורמות..."):
         model = load_nlp_model()
         all_markets_data = get_markets_data()
@@ -129,3 +140,4 @@ if st.sidebar.button("🚀 סרוק עכשיו"):
         st.dataframe(df)
     else:
         st.warning("לא נמצאו הזדמנויות ארביטראז' העומדות בסף שהוגדר.")
+
