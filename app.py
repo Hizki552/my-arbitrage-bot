@@ -30,20 +30,27 @@ def get_markets_data():
     except requests.RequestException as e:
         st.error(f"שגיאה בגישה ל-Kalshi: {e}")
 
-    # Polymarket
+    # Polymarket - *** לוגיקה חדשה ומשופרת ***
     try:
         r = requests.get("https://gamma-api.polymarket.com/events?closed=false&limit=1000", timeout=10 )
         r.raise_for_status()
-        polymarket_data = r.json()
-        # --- התיקון כאן: בודקים שהתשובה היא מילון לפני שמנסים לגשת ל-'data' ---
-        if isinstance(polymarket_data, dict):
-            polymarket_events = polymarket_data.get('data', [])
-            for e in polymarket_events:
-                for m in e.get('markets', []):
-                    if len(m.get('outcomes', [])) == 2:
-                        all_markets.append({'platform': 'Polymarket', 'title': e.get('question'), 'yes_price': float(m['outcomes'][0]['price']), 'no_price': float(m['outcomes'][1]['price'])})
+        polymarket_response = r.json()
+        
+        # בדיקה אם התשובה היא מילון שמכיל מפתח 'data'
+        if isinstance(polymarket_response, dict) and 'data' in polymarket_response:
+            polymarket_events = polymarket_response.get('data', [])
+        # בדיקה אם התשובה היא ישירות רשימה
+        elif isinstance(polymarket_response, list):
+            polymarket_events = polymarket_response
         else:
-            st.warning("Polymarket API returned an unexpected data format. Skipping for this scan.")
+            polymarket_events = []
+            st.warning("Polymarket API returned an unknown data format. Skipping for this scan.")
+
+        for e in polymarket_events:
+            for m in e.get('markets', []):
+                if len(m.get('outcomes', [])) == 2:
+                    all_markets.append({'platform': 'Polymarket', 'title': e.get('question'), 'yes_price': float(m['outcomes'][0]['price']), 'no_price': float(m['outcomes'][1]['price'])})
+    
     except requests.RequestException as e:
         st.error(f"שגיאה בגישה ל-Polymarket: {e}")
 
@@ -60,16 +67,12 @@ def get_markets_data():
         
     return all_markets
 
-# --- פונקציית הליבה המשודרגת להשוואה בין כל הזוגות ---
+# --- פונקציית הליבה להשוואה ---
 def find_all_opportunities(all_markets, model, similarity_thresh, profit_thresh):
     opportunities = []
-    
-    markets_by_platform = {}
+    markets_by_platform = {p: [] for p in ['Kalshi', 'Polymarket', 'Manifold']}
     for market in all_markets:
-        platform = market['platform']
-        if platform not in markets_by_platform:
-            markets_by_platform[platform] = []
-        markets_by_platform[platform].append(market)
+        markets_by_platform[market['platform']].append(market)
 
     platform_pairs = combinations(markets_by_platform.keys(), 2)
 
@@ -77,10 +80,10 @@ def find_all_opportunities(all_markets, model, similarity_thresh, profit_thresh)
         p1_markets = markets_by_platform[p1_name]
         p2_markets = markets_by_platform[p2_name]
 
+        if not p1_markets or not p2_markets: continue
+
         p1_titles = [m['title'] for m in p1_markets]
         p2_titles = [m['title'] for m in p2_markets]
-
-        if not p1_titles or not p2_titles: continue
 
         p1_embeddings = model.encode(p1_titles, convert_to_tensor=True)
         p2_embeddings = model.encode(p2_titles, convert_to_tensor=True)
@@ -117,13 +120,7 @@ st.sidebar.header("⚙️ הגדרות סריקה")
 similarity_threshold = st.sidebar.slider("סף דמיון סמנטי", 0.7, 1.0, 0.85, 0.01)
 profit_threshold = st.sidebar.slider("סף רווח נטו מינימלי (ROI %)", 0.0, 20.0, 1.0, 0.5)
 
-if 'scan_clicked' not in st.session_state:
-    st.session_state.scan_clicked = False
-
 if st.sidebar.button("🚀 סרוק עכשיו"):
-    st.session_state.scan_clicked = True
-
-if st.session_state.scan_clicked:
     with st.spinner("טוען מודל שפה ושולף נתונים מכל הפלטפורמות..."):
         model = load_nlp_model()
         all_markets_data = get_markets_data()
@@ -140,4 +137,3 @@ if st.session_state.scan_clicked:
         st.dataframe(df)
     else:
         st.warning("לא נמצאו הזדמנויות ארביטראז' העומדות בסף שהוגדר.")
-
